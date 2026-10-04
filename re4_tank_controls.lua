@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.2.8"
+local VERSION = "1.2.9"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -21,7 +21,6 @@ local cfg = {
     deadzone = 0.25,
     camera_snap_back = false, -- also return behind Leon while standing still
     pitch_k = 0.0, -- learned pitch value -> angle ratio, 0 = unknown
-    camera_follow_rate = 2.5,
     camera_input_pause = 1.5, -- seconds before the camera follows again after manual look
     aim_lock = true, -- no walking while aiming
     aim_from_facing = true, -- aiming starts from Leon's facing
@@ -202,6 +201,7 @@ local QUICK_TURN_STALL = 0.2  -- no progress for this long ends a quick turn
 local MOVE_POWER_HASH = 0x343fe603   -- move stick: vec2 (x right, y forward), float amount
 local CAMERA_INPUT_HASH = 0xb1331f3d -- mouse delta
 local AIM_BUTTON_HASH = 0x52965bd9   -- aim, float
+local CAMERA_FOLLOW_RATE = 10.0
 local AIM_SNAP_TIME = 0.35
 local AIM_SNAP_MIN_ANGLE = math.rad(15)
 local AIM_SNAP_RATE = 18.0
@@ -1174,7 +1174,7 @@ local function on_camera_update(ctrl)
 
     -- follow the heading, not the body, so they don't chase each other
     local target = S.moving and S.heading or S.body_yaw
-    local newY = Y + wrap(target - Y) * math.min(1.0, cfg.camera_follow_rate * S.dt)
+    local newY = Y + wrap(target - Y) * math.min(1.0, CAMERA_FOLLOW_RATE * S.dt)
     ctrl:call("setYaw", newY)
     S.cam_last_set_Y = newY
     S.cam_active = true
@@ -1232,7 +1232,6 @@ re.on_draw_ui(function()
     imgui.text("")
     imgui.text("Camera swings behind Leon while he moves or turns.")
     changed, v = imgui.checkbox("Camera snaps back when standing still", cfg.camera_snap_back); if changed then cfg.camera_snap_back = v; any = true end
-    changed, v = imgui.slider_float("Camera follow speed", cfg.camera_follow_rate, 0.5, 10.0, "%.1f"); if changed then cfg.camera_follow_rate = v; any = true end
     changed, v = imgui.slider_float("Snap back delay (s)", cfg.camera_input_pause, 0.0, 5.0, "%.1f"); if changed then cfg.camera_input_pause = v; any = true end
     changed, v = imgui.slider_float("Camera height range (deg)", cfg.camera_pitch_band, 0.0, 45.0, "%.0f"); if changed then cfg.camera_pitch_band = v; any = true end
 
