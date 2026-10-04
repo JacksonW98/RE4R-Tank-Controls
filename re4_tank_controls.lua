@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.3.0"
+local VERSION = "1.3.1"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -537,7 +537,7 @@ local function update()
     end
     local okb, boat = pcall(S.ctx.call, S.ctx, "get_IsBoat")
     S.in_boat = okb and boat == true
-    -- in the boat the left stick steers, so aiming can't block it
+    -- in the boat the left stick steers, so aiming mustn't block it
     S.aim_locked = cfg.enabled and cfg.aim_lock and S.suspended and AIM_REASONS[S.suspend_reason] == true
         and not S.in_boat
 
@@ -803,8 +803,46 @@ local function swap_sticks_for_aim()
     if swapped then S.stick_swaps = (S.stick_swaps or 0) + 1 end
 end
 
--- Del Lago fight remaps
-local function remap_boat_buttons()
+-- Is the player in the Del Lago fight? It uses its own boat type (GmBoat.BOATTYPE.DELLAGO).
+-- Outside the fight RT is the throttle.
+local scene_mgr_t = sdk.find_type_definition("via.SceneManager")
+local BOATTYPE_DELLAGO = 1
+
+local function boat_battle()
+    if S.now >= (S.boat_search_at or 0) then
+        S.boat_search_at = S.now + 2.0
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local ok, scene = pcall(sdk.call_native_func, sm, scene_mgr_t, "get_CurrentScene")
+        if ok and scene ~= nil then
+            local okc, comps = pcall(scene.call, scene, "findComponents(System.Type)", sdk.typeof("chainsaw.GmBoat"))
+            S.boats = okc and comps and comps:get_elements() or {}
+        end
+    end
+    local fight, aboard_any, dellago_any = false, false, false
+    for _, boat in ipairs(S.boats or {}) do
+        local okt, t = pcall(boat.call, boat, "get_BoatType")
+        local oka, on = pcall(boat.call, boat, "get_IsGetOn")
+        local okc, crew = pcall(boat.call, boat, "get_CrewPL")
+        local aboard = (oka and on == true) or (okc and crew ~= nil)
+        local dellago = okt and t == BOATTYPE_DELLAGO
+        if aboard then aboard_any = true end
+        if dellago then dellago_any = true end
+        if aboard and dellago then fight = true end
+    end
+    -- can't tell which boat the player is in: go by whether a Del Lago boat exists
+    if not aboard_any then fight = dellago_any end
+    local status = fight and "boat: Del Lago fight" or "boat: normal"
+    if status ~= S.boat_status then
+        S.boat_status = status
+        log.info("[RE4 Tank Controls] " .. status)
+    end
+    return fight
+end
+
+-- The boat reads the gamepad device directly, so remap there. Holding LB keeps the
+-- game's own layout (LB readies, RT throws) and X throws too. In the fight, RT also
+-- readies the harpoon and X throws it; elsewhere RT stays the throttle.
+local function remap_boat_buttons(fight)
     local gp = sdk.get_native_singleton("via.hid.GamePad")
     if gp == nil then return end
     S.boat_prev = S.boat_prev or {}
@@ -821,7 +859,9 @@ local function remap_boat_buttons()
                 local rt = (b & PAD.RT) ~= 0 or ar > 0.3
                 local x = (b & PAD.X) ~= 0
                 local nb, nar
-                if (b & PAD.LB) ~= 0 then
+                if not fight and (b & PAD.LB) == 0 then
+                    nb, nar = b, ar -- throttle etc.: leave it alone
+                elseif (b & PAD.LB) ~= 0 then
                     -- game layout: RT throws as normal, X throws too
                     nb, nar = b & ~PAD.X, ar
                     if x then nb, nar = nb | PAD.RT, 1.0 end
@@ -858,11 +898,12 @@ local function update_classic()
     if cfg.enabled and cfg.classic and S.in_boat then
         S.classic_ctx = nil
         if KB.applied ~= nil then apply_bindings(nil) end
-        if S.pad_rt > 0.3 or pad_down(PAD.LB) then swap_sticks_for_aim() end
-        remap_boat_buttons()
+        local fight = boat_battle()
+        if pad_down(PAD.LB) or (fight and S.pad_rt > 0.3) then swap_sticks_for_aim() end
+        remap_boat_buttons(fight)
         return
     end
-    S.boat_prev = nil
+    S.boat_prev, S.boats = nil, nil
     if not on then
         S.classic_ctx = nil
         if KB.applied ~= nil then apply_bindings(nil) end
@@ -1285,6 +1326,8 @@ local function draw_debug()
         tostring(S.aim_locked), tostring(S.hw_var ~= nil), S.blocked_reads or 0))
     imgui.text(string.format("Camera pitch mapping learned: %s", tostring(S.pitch_k)))
     imgui.text(string.format("Left-stick aim swaps: %d", S.stick_swaps or 0))
+    imgui.text(string.format("Boat: %s  (in boat=%s, boats in scene=%d)", S.in_boat and (S.boat_status or "-") or "-",
+        tostring(S.in_boat == true), S.boats and #S.boats or 0))
     imgui.text(string.format("Classic: context=%s  pad bindings=%d  applied=%s  refreshes=%d  target type=%s",
         tostring(S.classic_ctx), KB.list and #KB.list or 0, tostring(KB.applied), S.binding_refreshes or 0,
         tostring(S.target_type)))
