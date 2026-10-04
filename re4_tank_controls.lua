@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.2.9"
+local VERSION = "1.2.10"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -131,6 +131,16 @@ local function camera_forward()
     return f
 end
 
+-- Yaw of the camera that's actually rendering.
+local function rendered_camera_yaw()
+    local cam = sdk.get_primary_camera()
+    local go = cam and cam:call("get_GameObject")
+    local tf = go and go:call("get_Transform")
+    if tf == nil then return nil end
+    local f = flat(tf:call("get_Rotation") * Vector3f.new(0.0, 0.0, -1.0))
+    return f and yaw_of(f) or nil
+end
+
 -- Camera tilt in radians, positive is up.
 local function camera_world_pitch()
     local cam = sdk.get_primary_camera()
@@ -202,6 +212,7 @@ local MOVE_POWER_HASH = 0x343fe603   -- move stick: vec2 (x right, y forward), f
 local CAMERA_INPUT_HASH = 0xb1331f3d -- mouse delta
 local AIM_BUTTON_HASH = 0x52965bd9   -- aim, float
 local CAMERA_FOLLOW_RATE = 10.0
+local CAMERA_HOLD_TIME = 2.0 -- hands off the camera this long after the game had control
 local AIM_SNAP_TIME = 0.35
 local AIM_SNAP_MIN_ANGLE = math.rad(15)
 local AIM_SNAP_RATE = 18.0
@@ -507,6 +518,11 @@ local function update()
 
     S.body_yaw = body_yaw()
     S.suspended, S.suspend_reason = check_suspended(S.ctx)
+    -- leave the camera alone while (and just after) the game is in charge
+    local no_input = S.last_head_time ~= nil and S.now - S.last_head_time > 0.25
+    if no_input or (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) then
+        S.cam_hold_until = S.now + CAMERA_HOLD_TIME
+    end
 
     -- log state changes
     local state = S.suspended and ("paused: " .. S.suspend_reason) or "steering"
@@ -1055,6 +1071,17 @@ local function on_camera_update(ctrl)
     local Y = ctrl:call("get_Yaw")
     S.cam_Y = Y
     S.cam_active = false
+
+    -- A cutscene camera, or the blend back from one, is in charge if the rendered
+    -- camera doesn't point where this controller does. Hands off until shortly after.
+    local W = rendered_camera_yaw()
+    if type(Y) ~= "number" or W == nil or math.abs(wrap(Y - W)) > math.rad(10) then
+        S.cam_hold_until = S.now + CAMERA_HOLD_TIME
+    end
+    if S.now < (S.cam_hold_until or 0) then
+        S.pitch_last_P, S.cam_last_set_Y, S.unaim_until, S.aim_level_until = nil, nil, 0, 0
+        return
+    end
 
     -- Work out the pitch value -> angle ratio from how both change each frame. Some areas
     -- add a pitch offset, which breaks comparing the absolute values.
