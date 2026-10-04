@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.3.1"
+local VERSION = "1.4.0"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -855,6 +855,31 @@ local function boat_battle()
     return fight
 end
 
+-- Is the player operating a cannon (castle gate)? GmCannonV2.RoutineType:
+-- 1 = EnterModel (on it, aiming), 2 = WaitUserOperation, 3 = UserOperation (firing / reloading)
+-- or something like that
+local CANNON_IN_USE = { [1] = true, [2] = true, [3] = true }
+
+local function cannon_in_use()
+    if S.now >= (S.cannon_search_at or 0) then
+        S.cannon_search_at = S.now + 2.0
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local ok, scene = pcall(sdk.call_native_func, sm, scene_mgr_t, "get_CurrentScene")
+        if ok and scene ~= nil then
+            local okc, comps = pcall(scene.call, scene, "findComponents(System.Type)", sdk.typeof("chainsaw.GmCannonV2"))
+            S.cannons = okc and array_items(comps) or {}
+        end
+    end
+    local in_use, states = false, {}
+    for _, c in ipairs(S.cannons or {}) do
+        local ok, r = pcall(c.call, c, "get_Routine")
+        table.insert(states, ok and tostring(r) or "?")
+        if ok and CANNON_IN_USE[r] then in_use = true end
+    end
+    S.cannon_states = table.concat(states, ",")
+    return in_use
+end
+
 -- The boat reads the gamepad device directly, so remap there. Holding LB keeps the
 -- game's own layout (LB readies, RT throws) and X throws too. In the fight, RT also
 -- readies the harpoon and X throws it; elsewhere RT stays the throttle.
@@ -898,6 +923,37 @@ local function remap_boat_buttons(fight)
     end
 end
 
+-- Cannon: X fires too (the game's RT), at the device level like the boat. X only
+-- starts firing once it's been released after getting on (X also gets you on).
+local function remap_cannon_buttons()
+    local gp = sdk.get_native_singleton("via.hid.GamePad")
+    if gp == nil then return end
+    S.cannon_prev = S.cannon_prev or {}
+    local seen = {}
+    for _, getter in ipairs({ "get_MergedDevice", "get_LastInputDevice" }) do
+        local ok, dev = pcall(sdk.call_native_func, gp, gp_t, getter)
+        if ok and dev ~= nil and not seen[dev:get_address()] then
+            local addr = dev:get_address()
+            seen[addr] = true
+            local okb, b = pcall(dev.call, dev, "get_Button")
+            local oka, ar = pcall(dev.call, dev, "get_AnalogR")
+            if okb and type(b) == "number" then
+                ar = oka and type(ar) == "number" and ar or 0.0
+                local x = (b & PAD.X) ~= 0
+                if not x then S.cannon_x_armed = true end
+                local nb, nar = b & ~PAD.X, ar
+                if x and S.cannon_x_armed then nb, nar = nb | PAD.RT, 1.0 end
+                local prev = S.cannon_prev[addr] or nb
+                pcall(dev.call, dev, "set_Button", nb)
+                pcall(dev.call, dev, "set_ButtonDown", nb & ~prev)
+                pcall(dev.call, dev, "set_ButtonUp", prev & ~nb)
+                pcall(dev.call, dev, "set_AnalogR", nar)
+                S.cannon_prev[addr] = nb
+            end
+        end
+    end
+end
+
 local function update_classic()
     local pad = pad_state()
     S.pad_buttons = pad and pad.buttons or 0
@@ -909,6 +965,17 @@ local function update_classic()
         local ok, err = pcall(maintain_bindings)
         if not ok then S.last_error = "bindings: " .. tostring(err) end
     end
+    -- cannon: the game's own controls, the left stick aims too and X fires
+    S.on_cannon = cfg.enabled and cfg.classic and cannon_in_use()
+    if S.on_cannon then
+        S.classic_ctx = nil
+        if KB.applied ~= nil then apply_bindings(nil) end
+        swap_sticks_for_aim()
+        remap_cannon_buttons()
+        return
+    end
+    S.cannon_prev, S.cannon_x_armed = nil, false
+
     -- boat: the game's own controls, except RT readies the harpoon, X throws it
     -- and the left stick aims while it's up
     if cfg.enabled and cfg.classic and S.in_boat then
@@ -1342,6 +1409,8 @@ local function draw_debug()
         tostring(S.aim_locked), tostring(S.hw_var ~= nil), S.blocked_reads or 0))
     imgui.text(string.format("Camera pitch mapping learned: %s", tostring(S.pitch_k)))
     imgui.text(string.format("Left-stick aim swaps: %d", S.stick_swaps or 0))
+    imgui.text(string.format("On cannon: %s  (cannons in scene=%d, states=%s)", tostring(S.on_cannon == true),
+        S.cannons and #S.cannons or 0, S.cannon_states or "-"))
     imgui.text(string.format("Boat: %s  (in boat=%s, boats in scene=%d)", S.in_boat and (S.boat_status or "-") or "-",
         tostring(S.in_boat == true), S.boats and #S.boats or 0))
     imgui.text(string.format("Classic: context=%s  pad bindings=%d  applied=%s  refreshes=%d  target type=%s",
