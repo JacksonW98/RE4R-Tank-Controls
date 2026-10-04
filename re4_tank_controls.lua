@@ -535,7 +535,11 @@ local function update()
         S.logged_head_quiet = head_quiet
         log.info("[RE4 Tank Controls] movement input hook " .. (head_quiet and "not running" or "running"))
     end
+    local okb, boat = pcall(S.ctx.call, S.ctx, "get_IsBoat")
+    S.in_boat = okb and boat == true
+    -- in the boat the left stick steers, so aiming can't block it
     S.aim_locked = cfg.enabled and cfg.aim_lock and S.suspended and AIM_REASONS[S.suspend_reason] == true
+        and not S.in_boat
 
     -- Remember which way Leon faces, so aiming starts from there rather than from the camera.
     local aim_now = (command_float(AIM_BUTTON_HASH) or 0) > 0.5
@@ -799,17 +803,66 @@ local function swap_sticks_for_aim()
     if swapped then S.stick_swaps = (S.stick_swaps or 0) + 1 end
 end
 
+-- Del Lago fight remaps
+local function remap_boat_buttons()
+    local gp = sdk.get_native_singleton("via.hid.GamePad")
+    if gp == nil then return end
+    S.boat_prev = S.boat_prev or {}
+    local seen = {}
+    for _, getter in ipairs({ "get_MergedDevice", "get_LastInputDevice" }) do
+        local ok, dev = pcall(sdk.call_native_func, gp, gp_t, getter)
+        if ok and dev ~= nil and not seen[dev:get_address()] then
+            local addr = dev:get_address()
+            seen[addr] = true
+            local okb, b = pcall(dev.call, dev, "get_Button")
+            local oka, ar = pcall(dev.call, dev, "get_AnalogR")
+            if okb and type(b) == "number" then
+                ar = oka and type(ar) == "number" and ar or 0.0
+                local rt = (b & PAD.RT) ~= 0 or ar > 0.3
+                local x = (b & PAD.X) ~= 0
+                local nb, nar
+                if (b & PAD.LB) ~= 0 then
+                    -- game layout: RT throws as normal, X throws too
+                    nb, nar = b & ~PAD.X, ar
+                    if x then nb, nar = nb | PAD.RT, 1.0 end
+                else
+                    nb = b & ~(PAD.RT | PAD.X)
+                    if rt then nb = nb | PAD.LB end
+                    if x then nb = nb | PAD.RT end
+                    nar = x and 1.0 or 0.0
+                end
+                local prev = S.boat_prev[addr] or nb
+                pcall(dev.call, dev, "set_Button", nb)
+                pcall(dev.call, dev, "set_ButtonDown", nb & ~prev)
+                pcall(dev.call, dev, "set_ButtonUp", prev & ~nb)
+                pcall(dev.call, dev, "set_AnalogR", nar)
+                S.boat_prev[addr] = nb
+            end
+        end
+    end
+end
+
 local function update_classic()
     local pad = pad_state()
     S.pad_buttons = pad and pad.buttons or 0
     S.pad_rt = pad and pad.rt or 0
     -- stands down while the game is in charge (boat, ladders, events), but not while aiming
-    local game_in_charge = S.suspended and AIM_REASONS[S.suspend_reason] ~= true
+    local game_in_charge = (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) or S.in_boat
     local on = cfg.enabled and cfg.classic and S.head ~= nil and not game_in_charge
     if on then
         local ok, err = pcall(maintain_bindings)
         if not ok then S.last_error = "bindings: " .. tostring(err) end
     end
+    -- boat: the game's own controls, except RT readies the harpoon, X throws it
+    -- and the left stick aims while it's up
+    if cfg.enabled and cfg.classic and S.in_boat then
+        S.classic_ctx = nil
+        if KB.applied ~= nil then apply_bindings(nil) end
+        if S.pad_rt > 0.3 or pad_down(PAD.LB) then swap_sticks_for_aim() end
+        remap_boat_buttons()
+        return
+    end
+    S.boat_prev = nil
     if not on then
         S.classic_ctx = nil
         if KB.applied ~= nil then apply_bindings(nil) end
