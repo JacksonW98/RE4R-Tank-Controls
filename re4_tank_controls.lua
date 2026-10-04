@@ -212,7 +212,7 @@ local MOVE_POWER_HASH = 0x343fe603   -- move stick: vec2 (x right, y forward), f
 local CAMERA_INPUT_HASH = 0xb1331f3d -- mouse delta
 local AIM_BUTTON_HASH = 0x52965bd9   -- aim, float
 local CAMERA_FOLLOW_RATE = 10.0
-local CAMERA_HOLD_TIME = 2.0 -- hands off the camera this long after the game had control
+local CAMERA_HOLD_TIME = 2.0 -- no height adjustments this long after the game had control
 local AIM_SNAP_TIME = 0.35
 local AIM_SNAP_MIN_ANGLE = math.rad(15)
 local AIM_SNAP_RATE = 18.0
@@ -518,10 +518,10 @@ local function update()
 
     S.body_yaw = body_yaw()
     S.suspended, S.suspend_reason = check_suspended(S.ctx)
-    -- leave the camera alone while (and just after) the game is in charge
+    -- no camera height adjustments while (and just after) the game is in charge
     local no_input = S.last_head_time ~= nil and S.now - S.last_head_time > 0.25
     if no_input or (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) then
-        S.cam_hold_until = S.now + CAMERA_HOLD_TIME
+        S.pitch_hold_until = S.now + CAMERA_HOLD_TIME
     end
 
     -- log state changes
@@ -1072,22 +1072,24 @@ local function on_camera_update(ctrl)
     S.cam_Y = Y
     S.cam_active = false
 
-    -- A cutscene camera, or the blend back from one, is in charge if the rendered
-    -- camera doesn't point where this controller does. Hands off until shortly after.
+    -- A cutscene camera is in charge if the rendered camera doesn't point where this
+    -- controller does. Hands off entirely while it is, and off the height for a bit after.
     local W = rendered_camera_yaw()
     if type(Y) ~= "number" or W == nil or math.abs(wrap(Y - W)) > math.rad(10) then
-        S.cam_hold_until = S.now + CAMERA_HOLD_TIME
-    end
-    if S.now < (S.cam_hold_until or 0) then
-        S.pitch_last_P, S.cam_last_set_Y, S.unaim_until, S.aim_level_until = nil, nil, 0, 0
+        S.pitch_hold_until = S.now + CAMERA_HOLD_TIME
+        S.pitch_last_P, S.cam_last_set_Y = nil, nil
         return
     end
+    -- The blend back from a cutscene can still have the old tilt, so height
+    -- adjustments wait until it's done.
+    local pitch_hold = S.now < (S.pitch_hold_until or 0)
+    if pitch_hold then S.pitch_last_P, S.unaim_until, S.aim_level_until = nil, 0, 0 end
 
     -- Work out the pitch value -> angle ratio from how both change each frame. Some areas
     -- add a pitch offset, which breaks comparing the absolute values.
     local P = ctrl:call("get_Pitch")
     local wp = camera_world_pitch()
-    if type(P) == "number" and wp ~= nil and S.pitch_last_P ~= nil then
+    if not pitch_hold and type(P) == "number" and wp ~= nil and S.pitch_last_P ~= nil then
         local dP, dW = P - S.pitch_last_P, wp - S.pitch_last_wp
         if math.abs(dP) > 1e-5 and math.abs(dW) > 0.002 and math.abs(dW) < 0.3 then
             local ratio = dW / dP
@@ -1102,7 +1104,7 @@ local function on_camera_update(ctrl)
             end
         end
     end
-    S.pitch_last_P, S.pitch_last_wp = P, wp
+    if not pitch_hold then S.pitch_last_P, S.pitch_last_wp = P, wp end
 
     -- aim comes up level
     if cfg.enabled and cfg.aim_from_facing and S.pitch_k ~= nil and wp ~= nil and type(P) == "number"
