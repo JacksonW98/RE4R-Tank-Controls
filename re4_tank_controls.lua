@@ -808,6 +808,22 @@ end
 local scene_mgr_t = sdk.find_type_definition("via.SceneManager")
 local BOATTYPE_DELLAGO = 1
 
+-- Elements of a game array, whatever form it comes back in.
+local function array_items(arr)
+    if arr == nil then return {} end
+    local ok, items = pcall(function() return arr:get_elements() end)
+    if ok and type(items) == "table" then return items end
+    local out = {}
+    local okn, n = pcall(function() return arr:get_size() end)
+    if okn and type(n) == "number" then
+        for i = 0, n - 1 do
+            local oke, e = pcall(function() return arr:get_element(i) end)
+            if oke and e ~= nil then table.insert(out, e) end
+        end
+    end
+    return out
+end
+
 local function boat_battle()
     if S.now >= (S.boat_search_at or 0) then
         S.boat_search_at = S.now + 2.0
@@ -815,7 +831,7 @@ local function boat_battle()
         local ok, scene = pcall(sdk.call_native_func, sm, scene_mgr_t, "get_CurrentScene")
         if ok and scene ~= nil then
             local okc, comps = pcall(scene.call, scene, "findComponents(System.Type)", sdk.typeof("chainsaw.GmBoat"))
-            S.boats = okc and comps and comps:get_elements() or {}
+            S.boats = okc and array_items(comps) or {}
         end
     end
     local fight, aboard_any, dellago_any = false, false, false
