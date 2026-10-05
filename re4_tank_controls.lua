@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.5.1"
+local VERSION = "1.6.0"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -526,7 +526,8 @@ local function update()
     -- only stand down for a ride when the game has taken over movement (boat, minecart).
     S.ride_flag = S.suspend_reason == "IsMoveGimmickRide"
     local hook_running = S.last_head_time ~= nil and S.now - S.last_head_time <= 0.25
-    if S.ride_flag and hook_running and not S.in_boat and not S.in_cart then
+    if S.ride_flag and hook_running and not S.in_boat and not S.in_cart
+        and not S.on_cannon and not S.on_minigun then
         S.suspended, S.suspend_reason = check_suspended(S.ctx, "get_IsMoveGimmickRide")
     end
     -- no camera height adjustments while (and just after) the game is in charge
@@ -931,8 +932,29 @@ local function remap_boat_buttons(fight)
     end
 end
 
--- Cannon: X fires too (the game's RT), at the device level like the boat. X only
--- starts firing once it's been released after getting on (X also gets you on).
+-- Is the player on a mounted machine gun (the island)?
+local function minigun_in_use()
+    if S.now >= (S.minigun_search_at or 0) then
+        S.minigun_search_at = S.now + 2.0
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local ok, scene = pcall(sdk.call_native_func, sm, scene_mgr_t, "get_CurrentScene")
+        if ok and scene ~= nil then
+            local okc, comps = pcall(scene.call, scene, "findComponents(System.Type)",
+                sdk.typeof("chainsaw.GmInstalledMachineGun"))
+            S.miniguns = okc and array_items(comps) or {}
+        end
+    end
+    if S.ctx == nil then return false end
+    local me = S.ctx:get_address()
+    for _, gun in ipairs(S.miniguns or {}) do
+        local ok, user = pcall(gun.get_field, gun, "_UsePlayerCtx")
+        if ok and user ~= nil and user:get_address() == me then return true end
+    end
+    return false
+end
+
+-- Cannon and minigun: X fires too (the game's RT), at the device level like the boat.
+-- X only starts firing once it's been released after getting on (X also gets you on).
 local function remap_cannon_buttons()
     local gp = sdk.get_native_singleton("via.hid.GamePad")
     if gp == nil then return end
@@ -1045,9 +1067,10 @@ local function update_classic()
         local ok, err = pcall(maintain_bindings)
         if not ok then S.last_error = "bindings: " .. tostring(err) end
     end
-    -- cannon: the game's own controls, the left stick aims too and X fires
+    -- cannon / minigun: the game's own controls, the left stick aims too and X fires
     S.on_cannon = cfg.enabled and cfg.classic and cannon_in_use()
-    if S.on_cannon then
+    S.on_minigun = cfg.enabled and cfg.classic and not S.on_cannon and minigun_in_use()
+    if S.on_cannon or S.on_minigun then
         S.classic_ctx = nil
         if KB.applied ~= nil then apply_bindings(nil) end
         swap_sticks_for_aim()
@@ -1503,6 +1526,8 @@ local function draw_debug()
         tostring(S.aim_locked), tostring(S.hw_var ~= nil), S.blocked_reads or 0))
     imgui.text(string.format("Camera pitch mapping learned: %s", tostring(S.pitch_k)))
     imgui.text(string.format("Left-stick aim swaps: %d", S.stick_swaps or 0))
+    imgui.text(string.format("On minigun: %s  (guns in scene=%d)", tostring(S.on_minigun == true),
+        S.miniguns and #S.miniguns or 0))
     imgui.text(string.format("In minecart: %s  (carts in scene=%d)", tostring(S.in_cart == true),
         S.carts and #S.carts or 0))
     imgui.text(string.format("On cannon: %s  (cannons in scene=%d, states=%s)", tostring(S.on_cannon == true),
