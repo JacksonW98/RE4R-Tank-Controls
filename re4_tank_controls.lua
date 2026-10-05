@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.7.0"
+local VERSION = "1.7.1"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -1076,10 +1076,11 @@ local function update_classic()
     S.pad_buttons = pad and pad.buttons or 0
     S.pad_rt = pad and pad.rt or 0
     S.pad_lt = pad and pad.lt or 0
-    -- Leon readies his knife with LT; anyone else (Ashley's lantern) can use LT to ready too
+    -- Everyone readies their knife with LT except Ashley, who has no knife, so LT can
+    -- raise her lantern too. CharacterKindID ch0_a1z0 = 110000 is playable Ashley.
     local okk, kind = false, nil
     if S.ctx ~= nil then okk, kind = pcall(S.ctx.call, S.ctx, "get_KindID") end
-    S.is_leon = not okk or kind == nil or kind == 100000 -- CharacterKindID ch0_a0z0
+    S.has_knife = not (okk and kind == 110000)
     -- stands down while the game is in charge (boat, ladders, events), but not while aiming
     S.in_cart = cfg.enabled and cart_ride()
     local game_in_charge = (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) or S.in_boat or S.in_cart
@@ -1158,7 +1159,7 @@ local function classic_float(hash, orig)
     if hash == HOLD_HASH and quick_turn_busy() then return 0.0 end
     if S.classic_ctx == nil then return nil end
     if hash == HOLD_HASH then
-        local ready = S.pad_rt > 0.3 or (not S.is_leon and (S.pad_lt or 0) > 0.3)
+        local ready = S.pad_rt > 0.3 or (not S.has_knife and (S.pad_lt or 0) > 0.3)
         return (S.classic_ctx ~= "prompt" and ready) and 1.0 or 0.0
     end
     if hash == SHOT_HASH then
@@ -1547,6 +1548,8 @@ local function draw_debug()
         tostring(S.aim_locked), tostring(S.hw_var ~= nil), S.blocked_reads or 0))
     imgui.text(string.format("Camera pitch mapping learned: %s", tostring(S.pitch_k)))
     imgui.text(string.format("Left-stick aim swaps: %d", S.stick_swaps or 0))
+    imgui.text(string.format("Player kind: %s  (has knife=%s)", tostring(S.ctx and S.ctx:call("get_KindID")),
+        tostring(S.has_knife)))
     imgui.text(string.format("On jet ski: %s  (jet skis in scene=%d)", tostring(S.on_jetski == true),
         S.jetskis and #S.jetskis or 0))
     imgui.text(string.format("On minigun: %s  (guns in scene=%d)", tostring(S.on_minigun == true),
