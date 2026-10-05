@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.4.0"
+local VERSION = "1.5.0"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -539,7 +539,7 @@ local function update()
     S.in_boat = okb and boat == true
     -- in the boat the left stick steers, so aiming mustn't block it
     S.aim_locked = cfg.enabled and cfg.aim_lock and S.suspended and AIM_REASONS[S.suspend_reason] == true
-        and not S.in_boat
+        and not S.in_boat and not S.in_cart
 
     -- Remember which way Leon faces, so aiming starts from there rather than from the camera.
     local aim_now = (command_float(AIM_BUTTON_HASH) or 0) > 0.5
@@ -857,7 +857,6 @@ end
 
 -- Is the player operating a cannon (castle gate)? GmCannonV2.RoutineType:
 -- 1 = EnterModel (on it, aiming), 2 = WaitUserOperation, 3 = UserOperation (firing / reloading)
--- or something like that
 local CANNON_IN_USE = { [1] = true, [2] = true, [3] = true }
 
 local function cannon_in_use()
@@ -954,12 +953,84 @@ local function remap_cannon_buttons()
     end
 end
 
+-- Is the player riding a minecart? Only checked while the mod is paused for something.
+local function cart_ride()
+    if not S.suspended then
+        S.carts = nil
+        return false
+    end
+    if S.carts == nil or S.now >= (S.cart_search_at or 0) then
+        S.cart_search_at = S.now + 2.0
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local ok, scene = pcall(sdk.call_native_func, sm, scene_mgr_t, "get_CurrentScene")
+        if ok and scene ~= nil then
+            local okc, comps = pcall(scene.call, scene, "findComponents(System.Type)", sdk.typeof("chainsaw.GmRailCar"))
+            S.carts = okc and array_items(comps) or {}
+        end
+    end
+    for _, cart in ipairs(S.carts or {}) do
+        local okc, crew = pcall(cart.call, cart, "get_Crew")
+        local okl, live = pcall(cart.call, cart, "get_IsLiveCrew")
+        if okc and crew ~= nil and okl and live == true then return true end
+    end
+    return false
+end
+
+-- Minecart: RT readies the gun (the game's LT) and X shoots (the game's RT). Holding LT
+-- keeps the game's own layout, so LT + RT still works and X shoots too.
+local function remap_cart_buttons()
+    local gp = sdk.get_native_singleton("via.hid.GamePad")
+    if gp == nil then return end
+    S.cart_prev = S.cart_prev or {}
+    local seen = {}
+    for _, getter in ipairs({ "get_MergedDevice", "get_LastInputDevice" }) do
+        local ok, dev = pcall(sdk.call_native_func, gp, gp_t, getter)
+        if ok and dev ~= nil and not seen[dev:get_address()] then
+            local addr = dev:get_address()
+            seen[addr] = true
+            local okb, b = pcall(dev.call, dev, "get_Button")
+            local okl, al = pcall(dev.call, dev, "get_AnalogL")
+            local okr, ar = pcall(dev.call, dev, "get_AnalogR")
+            if okb and type(b) == "number" then
+                al = okl and type(al) == "number" and al or 0.0
+                ar = okr and type(ar) == "number" and ar or 0.0
+                local lt = (b & PAD.LT) ~= 0 or al > 0.3
+                local rt = (b & PAD.RT) ~= 0 or ar > 0.3
+                local x = (b & PAD.X) ~= 0
+                local nb, nal, nar
+                if lt then
+                    nb, nal, nar = b & ~PAD.X, al, ar
+                    if x then nb, nar = nb | PAD.RT, 1.0 end
+                else
+                    nb, nal = b & ~(PAD.RT | PAD.X), al
+                    if rt then nb, nal = nb | PAD.LT, 1.0 end
+                    nar = 0.0
+                    if x then nb, nar = nb | PAD.RT, 1.0 end
+                end
+                local prev = S.cart_prev[addr] or nb
+                pcall(dev.call, dev, "set_Button", nb)
+                pcall(dev.call, dev, "set_ButtonDown", nb & ~prev)
+                pcall(dev.call, dev, "set_ButtonUp", prev & ~nb)
+                pcall(dev.call, dev, "set_AnalogL", nal)
+                pcall(dev.call, dev, "set_AnalogR", nar)
+                S.cart_prev[addr] = nb
+            end
+        end
+    end
+end
+
 local function update_classic()
     local pad = pad_state()
     S.pad_buttons = pad and pad.buttons or 0
     S.pad_rt = pad and pad.rt or 0
+    S.pad_lt = pad and pad.lt or 0
+    -- Leon readies his knife with LT; anyone else (Ashley's lantern) can use LT to ready too
+    local okk, kind = false, nil
+    if S.ctx ~= nil then okk, kind = pcall(S.ctx.call, S.ctx, "get_KindID") end
+    S.is_leon = not okk or kind == nil or kind == 100000 -- CharacterKindID ch0_a0z0
     -- stands down while the game is in charge (boat, ladders, events), but not while aiming
-    local game_in_charge = (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) or S.in_boat
+    S.in_cart = cfg.enabled and cart_ride()
+    local game_in_charge = (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) or S.in_boat or S.in_cart
     local on = cfg.enabled and cfg.classic and S.head ~= nil and not game_in_charge
     if on then
         local ok, err = pcall(maintain_bindings)
@@ -975,6 +1046,17 @@ local function update_classic()
         return
     end
     S.cannon_prev, S.cannon_x_armed = nil, false
+
+    -- minecart: the game's own controls, except RT readies the gun, X shoots and the
+    -- left stick aims while it's up
+    if cfg.enabled and cfg.classic and S.in_cart then
+        S.classic_ctx = nil
+        if KB.applied ~= nil then apply_bindings(nil) end
+        if S.pad_rt > 0.3 or S.pad_lt > 0.3 or pad_down(PAD.LT) then swap_sticks_for_aim() end
+        remap_cart_buttons()
+        return
+    end
+    S.cart_prev = nil
 
     -- boat: the game's own controls, except RT readies the harpoon, X throws it
     -- and the left stick aims while it's up
@@ -1022,7 +1104,10 @@ local function classic_float(hash, orig)
     if hash == MOVE_POWER_HASH and S.quick_turn_left > 0 and tank_active() then return 1.0 end
     if hash == HOLD_HASH and quick_turn_busy() then return 0.0 end
     if S.classic_ctx == nil then return nil end
-    if hash == HOLD_HASH then return (S.classic_ctx ~= "prompt" and S.pad_rt > 0.3) and 1.0 or 0.0 end
+    if hash == HOLD_HASH then
+        local ready = S.pad_rt > 0.3 or (not S.is_leon and (S.pad_lt or 0) > 0.3)
+        return (S.classic_ctx ~= "prompt" and ready) and 1.0 or 0.0
+    end
     if hash == SHOT_HASH then
         if S.classic_ctx == "prompt" then return S.pad_rt end
         local up = S.classic_ctx == "gun" or S.classic_ctx == "gun_wait" or S.classic_ctx == "knife"
@@ -1409,6 +1494,8 @@ local function draw_debug()
         tostring(S.aim_locked), tostring(S.hw_var ~= nil), S.blocked_reads or 0))
     imgui.text(string.format("Camera pitch mapping learned: %s", tostring(S.pitch_k)))
     imgui.text(string.format("Left-stick aim swaps: %d", S.stick_swaps or 0))
+    imgui.text(string.format("In minecart: %s  (carts in scene=%d)", tostring(S.in_cart == true),
+        S.carts and #S.carts or 0))
     imgui.text(string.format("On cannon: %s  (cannons in scene=%d, states=%s)", tostring(S.on_cannon == true),
         S.cannons and #S.cannons or 0, S.cannon_states or "-"))
     imgui.text(string.format("Boat: %s  (in boat=%s, boats in scene=%d)", S.in_boat and (S.boat_status or "-") or "-",
