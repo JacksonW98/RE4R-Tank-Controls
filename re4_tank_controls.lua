@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.5.0"
+local VERSION = "1.5.1"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -172,10 +172,12 @@ local SUSPEND_FLAGS = {
 -- While aiming, the mod only stops Leon from walking.
 local AIM_REASONS = { IsHolding = true, IsHoldStart = true, IsAiming = true }
 
-local function check_suspended(ctx)
+local function check_suspended(ctx, skip)
     for _, m in ipairs(SUSPEND_FLAGS) do
+        if m == skip then goto continue end
         local ok, v = pcall(ctx.call, ctx, m)
         if ok and v == true then return true, m:sub(5) end
+        ::continue::
     end
     return false, ""
 end
@@ -518,6 +520,15 @@ local function update()
 
     S.body_yaw = body_yaw()
     S.suspended, S.suspend_reason = check_suspended(S.ctx)
+    local okb, boat = pcall(S.ctx.call, S.ctx, "get_IsBoat")
+    S.in_boat = okb and boat == true
+    -- Rides like the lift fight still let Leon walk (our movement hook keeps running), so
+    -- only stand down for a ride when the game has taken over movement (boat, minecart).
+    S.ride_flag = S.suspend_reason == "IsMoveGimmickRide"
+    local hook_running = S.last_head_time ~= nil and S.now - S.last_head_time <= 0.25
+    if S.ride_flag and hook_running and not S.in_boat and not S.in_cart then
+        S.suspended, S.suspend_reason = check_suspended(S.ctx, "get_IsMoveGimmickRide")
+    end
     -- no camera height adjustments while (and just after) the game is in charge
     local no_input = S.last_head_time ~= nil and S.now - S.last_head_time > 0.25
     if no_input or (S.suspended and AIM_REASONS[S.suspend_reason] ~= true) then
@@ -535,8 +546,6 @@ local function update()
         S.logged_head_quiet = head_quiet
         log.info("[RE4 Tank Controls] movement input hook " .. (head_quiet and "not running" or "running"))
     end
-    local okb, boat = pcall(S.ctx.call, S.ctx, "get_IsBoat")
-    S.in_boat = okb and boat == true
     -- in the boat the left stick steers, so aiming mustn't block it
     S.aim_locked = cfg.enabled and cfg.aim_lock and S.suspended and AIM_REASONS[S.suspend_reason] == true
         and not S.in_boat and not S.in_cart
@@ -955,7 +964,7 @@ end
 
 -- Is the player riding a minecart? Only checked while the mod is paused for something.
 local function cart_ride()
-    if not S.suspended then
+    if not S.suspended and not S.ride_flag then
         S.carts = nil
         return false
     end
