@@ -8,7 +8,7 @@
 
 if reframework:get_game_name() ~= "re4" then return end
 
-local VERSION = "1.6.0"
+local VERSION = "1.7.0"
 local CONFIG_FILE = "re4_tank_controls.json"
 local RECORD_FILE = "re4_tank_controls_record.json"
 
@@ -520,6 +520,8 @@ local function update()
 
     S.body_yaw = body_yaw()
     S.suspended, S.suspend_reason = check_suspended(S.ctx)
+    -- the jet ski isn't flagged as a ride, so it's detected separately
+    if not S.suspended and S.on_jetski then S.suspended, S.suspend_reason = true, "JetSki" end
     local okb, boat = pcall(S.ctx.call, S.ctx, "get_IsBoat")
     S.in_boat = okb and boat == true
     -- Rides like the lift fight still let Leon walk (our movement hook keeps running), so
@@ -932,6 +934,24 @@ local function remap_boat_buttons(fight)
     end
 end
 
+-- Is the player riding the jet ski (the ending)?
+local function jetski_ride()
+    if S.now >= (S.jetski_search_at or 0) then
+        S.jetski_search_at = S.now + 2.0
+        local sm = sdk.get_native_singleton("via.SceneManager")
+        local ok, scene = pcall(sdk.call_native_func, sm, scene_mgr_t, "get_CurrentScene")
+        if ok and scene ~= nil then
+            local okc, comps = pcall(scene.call, scene, "findComponents(System.Type)", sdk.typeof("chainsaw.GmJetSki"))
+            S.jetskis = okc and array_items(comps) or {}
+        end
+    end
+    for _, ski in ipairs(S.jetskis or {}) do
+        local ok, crew = pcall(ski.call, ski, "get_Crew")
+        if ok and crew ~= nil then return true end
+    end
+    return false
+end
+
 -- Is the player on a mounted machine gun (the island)?
 local function minigun_in_use()
     if S.now >= (S.minigun_search_at or 0) then
@@ -1051,6 +1071,7 @@ local function remap_cart_buttons()
 end
 
 local function update_classic()
+    S.on_jetski = cfg.enabled and jetski_ride()
     local pad = pad_state()
     S.pad_buttons = pad and pad.buttons or 0
     S.pad_rt = pad and pad.rt or 0
@@ -1526,6 +1547,8 @@ local function draw_debug()
         tostring(S.aim_locked), tostring(S.hw_var ~= nil), S.blocked_reads or 0))
     imgui.text(string.format("Camera pitch mapping learned: %s", tostring(S.pitch_k)))
     imgui.text(string.format("Left-stick aim swaps: %d", S.stick_swaps or 0))
+    imgui.text(string.format("On jet ski: %s  (jet skis in scene=%d)", tostring(S.on_jetski == true),
+        S.jetskis and #S.jetskis or 0))
     imgui.text(string.format("On minigun: %s  (guns in scene=%d)", tostring(S.on_minigun == true),
         S.miniguns and #S.miniguns or 0))
     imgui.text(string.format("In minecart: %s  (carts in scene=%d)", tostring(S.in_cart == true),
