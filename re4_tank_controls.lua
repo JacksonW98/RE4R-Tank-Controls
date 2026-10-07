@@ -1599,8 +1599,8 @@ re.on_draw_ui(function()
     imgui.text("")
     changed, v = imgui.checkbox("Classic controls (controller)", cfg.classic); if changed then cfg.classic = v; any = true end
     if cfg.classic then
-        imgui.text_colored("  Set the game's controller preset to its classic layout first", 0xFF00FFFF)
-        imgui.text_colored("  (LT weapon, LB knife, RT shoot, RB reload, X interact, A run).", 0xFF00FFFF)
+        imgui.text_colored("  In the game's options, set the control type to C-1", 0xFF00FFFF)
+        imgui.text_colored("  and the quick turn type to A (Run).", 0xFF00FFFF)
         imgui.text("  A run, hold back then A: quick turn, X interact, B crouch")
         imgui.text("  RT ready gun, LT or LB ready knife")
         imgui.text("  Weapon up: X fire/slash, A or RB reload, left stick aims")
