@@ -1,5 +1,7 @@
 # RE4 Tank Controls
 
+(Note that anytime I refer to Leon, this applies to other playable characters like Ada as well.)
+
 Play Resident Evil 4 (2023) with the tank controls of the original 2005 game. Push forward and Leon walks the way he's facing, left and right turn him, and back walks him backwards.
 
 There's also an optional classic controller layout, so the buttons work the way they did in the original too.
